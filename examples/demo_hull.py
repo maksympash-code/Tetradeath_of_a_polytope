@@ -1,4 +1,4 @@
-from cg3d.geom import unique_points, Pt
+from cg3d.geom import unique_points
 from cg3d.hull import ConvexHull3D
 
 if __name__ == "__main__":
@@ -9,9 +9,10 @@ if __name__ == "__main__":
     ]
     pts = unique_points(raw)
     hull = ConvexHull3D(pts)
-    print("Faces (triangles as vertex indices):")
-    for tri in hull.faces():
-        print(tri)
 
-    print(hull.validate())
-    open("hull.off", "w", encoding="utf-8").write(hull.to_off())
+    report = hull.validate()
+    print("VALIDATION:", report)
+
+    with open("hull.off", "w", encoding="utf-8") as f:
+        f.write(hull.to_off())
+    print("Wrote hull.off — можна глянути в MeshLab/ParaView.")
