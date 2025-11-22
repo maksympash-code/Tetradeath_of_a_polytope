@@ -1,60 +1,48 @@
-# cg3d/pipeline.py
 from __future__ import annotations
-from typing import List, Tuple, Sequence
+from typing import Iterable, List, Sequence, Tuple
 
 from .geom import Pt, unique_points
 from .hull import ConvexHull3D
-from .mesh import Delaunay3D
 
-def _to_pts(raw: Sequence[Tuple[float, float, float]]) -> List[Pt]:
-    return [Pt(x, y, z) for (x, y, z) in unique_points(raw)]
 
 def tetrahedralize_convex(
-    points: Sequence[Tuple[float, float, float]],
-    backend: str = "internal",  # "internal" або "scipy"
-):
+    points: Iterable[Tuple[float, float, float]],
+    backend: str = "scipy",
+) -> Tuple[List[Pt], List[Tuple[int, int, int]], List[Tuple[int, int, int, int]]]:
     """
-    Тетраедралізація опуклого політопу.
-    Повертає (pts, surface_triangles, tetrahedra), де:
-      - pts: список Pt у фінальному порядку (без дублікатів),
-      - surface_triangles: List[Tuple[int,int,int]] (грані опуклої оболонки),
-      - tetrahedra: List[Tuple[int,int,int,int]] (тетри, що заповнюють об’єм).
+    Повний пайплайн:
+      - прибирає дублікати точок;
+      - будує опуклу оболонку (наш ConvexHull3D) -> surface_triangles;
+      - будує 3D Делоне-тетраедралізацію через SciPy Delaunay -> tetrahedra.
 
-    backend:
-      - "internal": наш власний ConvexHull3D + Delaunay3D (без залежностей)
-      - "scipy": спробувати SciPy (ConvexHull, Delaunay), якщо встановлено
+    Повертає:
+      pts       — список Pt у фінальному порядку;
+      surface   — список трикутників оболонки (індекси у pts);
+      tets      — список тетраедрів (індекси у pts).
     """
-    # --- підготовка точок (дедуп) ---
-    pts = _to_pts(points)
+    pts: List[Pt] = unique_points(points)  # твоя існуюча функція, що вертає List[Pt]
+
+    # 1) Опукла оболонка нашою реалізацією
+    hull = ConvexHull3D(pts)
+    surface = hull.faces()  # List[Tuple[int,int,int]]
 
     if backend.lower() == "scipy":
         try:
             import numpy as np
-            from scipy.spatial import ConvexHull, Delaunay
-            arr = np.array([(p.x, p.y, p.z) for p in pts], dtype=float)
+            from scipy.spatial import Delaunay
+        except ImportError as e:
+            raise RuntimeError(
+                "backend='scipy', але SciPy не встановлено. "
+                "Встанови scipy або використай інший backend."
+            ) from e
 
-            # 1) опукла оболонка -> трикутні грані
-            hull = ConvexHull(arr)                 # O(n log n), Qhull
-            surface = [tuple(tri.tolist()) for tri in hull.simplices]
+        arr = np.array([(p.x, p.y, p.z) for p in pts], dtype=float)
 
-            # 2) 3D Делоне -> тетраедри
-            tri = Delaunay(arr, qhull_options="QJ")  # QJ = joggle для робастності
-            tets = [tuple(t.tolist()) for t in tri.simplices]
-            return pts, surface, tets
+        # 2) 3D Delaunay (Qhull під капотом)
+        dela = Delaunay(arr, qhull_options="QJ")  # QJ = joggle для робастності
+        tets = [tuple(int(i) for i in simplex) for simplex in dela.simplices]
 
-        except Exception:
-            # падаємо на внутрішній бекенд, якщо SciPy недоступний
-            backend = "internal"
+        return pts, surface, tets
 
-    # --- внутрішній бекенд (наші структури) ---
-    # 1) опукла оболонка
-    hull = ConvexHull3D(pts)
-    surface = hull.faces()  # List[Tuple[int,int,int]]
-
-    # 2) 3D Делоне (Bowyer–Watson) + вирізати супер-тетра
-    d3 = Delaunay3D(pts)
-    d3.build()
-    d3.remove_super_tetra()
-
-    tets = [t.v for t in d3.mesh.tets if t.alive]  # List[Tuple[int,int,int,int]]
-    return pts, surface, tets
+    else:
+        raise ValueError(f"Невідомий backend: {backend}")

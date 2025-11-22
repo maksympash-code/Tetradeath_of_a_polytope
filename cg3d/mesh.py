@@ -40,18 +40,27 @@ class TetMesh:
         self.facemap: Dict[FaceKey, List[Tuple[int, int]]] = {}
 
     def add_tet(self, v0: int, v1: int, v2: int, v3: int) -> int:
+        """
+        Додає тетраедр (v0,v1,v2,v3) і гарантує позитивну орієнтацію:
+        orient3d(v0,v1,v2,v3) > 0
+        """
         tid = len(self.tets)
         t = Tet((v0, v1, v2, v3))
-        # зорієнтуємо тетраедр так, щоб orient3d(v0,v1,v2,v3) > 0 (позитивна орієнтація)
-        if orient3d(self.points[v0], self.points[v1], self.points[v2], self.points[v3]) < 0:
-            # поміняємо дві вершини місцями (парна перестановка для зміни знаку)
-            t.v = (v0, v2, v1, v3)
+
+        # виправляємо орієнтацію, якщо потрібно
+        a, b, c, d = t.v
+        if orient3d(self.points[a], self.points[b], self.points[c], self.points[d]) <= 0:
+            # міняємо місцями дві вершини (наприклад b<->c) — це міняє знак
+            t.v = (a, c, b, d)
+
         self.tets.append(t)
+
         # зареєструвати грані у facemap
         for i in range(4):
-            a, b, c = t.face_vertices(i)
-            key = tuple(sorted((a, b, c)))
+            fa, fb, fc = t.face_vertices(i)
+            key = tuple(sorted((fa, fb, fc)))
             self.facemap.setdefault(key, []).append((tid, i))
+
         return tid
 
     def link(self, ta: int, fa: int, tb: int, fb: int) -> None:
@@ -228,6 +237,65 @@ class TetMesh:
     def write_boundary_off(self, path: str) -> None:
         with open(path, "w", encoding="utf-8") as f:
             f.write(self.boundary_off())
+
+    # ---------- VTK-експорт повної тетра-сітки ----------
+    def to_vtk_unstructured(self) -> str:
+        """
+        ASCII VTK UNSTRUCTURED_GRID для всіх живих тетраедрів.
+        Це можна відкривати у ParaView / MeshLab / ін. VTK-візуалізаторах.
+        """
+        # 1) зібрати живі тетри
+        alive_tets = [t for t in self.tets if t.alive]
+        if not alive_tets:
+            # порожня сітка
+            return "\n".join([
+                "# vtk DataFile Version 3.0",
+                "Empty tetra mesh",
+                "ASCII",
+                "DATASET UNSTRUCTURED_GRID",
+                "POINTS 0 float",
+                "CELLS 0 0",
+                "CELL_TYPES 0",
+            ])
+
+        # 2) всі використані вершини та ремап індексів
+        used = sorted({v for t in alive_tets for v in t.v})
+        remap = {old: i for i, old in enumerate(used)}
+
+        lines = []
+        lines.append("# vtk DataFile Version 3.0")
+        lines.append("Tetrahedral mesh")
+        lines.append("ASCII")
+        lines.append("DATASET UNSTRUCTURED_GRID")
+        lines.append(f"POINTS {len(used)} float")
+
+        # 3) вершини
+        for vi in used:
+            p = self.points[vi]
+            lines.append(f"{p.x} {p.y} {p.z}")
+
+        # 4) клітини (тетри): 4 <a b c d>
+        num_cells = len(alive_tets)
+        # CELLS <num_cells> <num_cells * (1 + num_vertices_per_cell)>
+        lines.append(f"CELLS {num_cells} {num_cells * 5}")
+        for t in alive_tets:
+            a, b, c, d = (remap[v] for v in t.v)
+            lines.append(f"4 {a} {b} {c} {d}")
+
+        # 5) типи клітин: 10 = VTK_TETRA
+        lines.append(f"CELL_TYPES {num_cells}")
+        for _ in range(num_cells):
+            lines.append("10")
+
+        return "\n".join(lines)
+
+    def write_vtk_unstructured(self, path: str) -> None:
+        """
+        Записати повну тетра-сітку в ASCII VTK (UNSTRUCTURED_GRID).
+        """
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(self.to_vtk_unstructured())
+
 
 
 class Delaunay3D:
