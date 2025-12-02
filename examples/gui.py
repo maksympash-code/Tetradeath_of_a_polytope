@@ -15,6 +15,7 @@ matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  # потрібен для 'projection="3d"'
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 
 def build_mesh_from_tets(pts, tets):
@@ -91,10 +92,16 @@ class TetraApp(tk.Tk):
         self.title("Tetradeath of a Polytope")
         self.geometry("800x650")
 
-        # сюди покладемо Figure/Canvas
+        # Figure/Canvas
         self.fig = None
         self.ax = None
         self.canvas = None
+
+        # Дані останньої тетраедралізації
+        self.pts = None        # список Pt
+        self.surface = None    # список трикутних граней оболонки
+        self.tets = None       # список тетраедрів (четвірки індексів)
+        self.mesh = None       # TetMesh (опціонально, якщо захочеш щось ще)
 
         self._build_widgets()
 
@@ -193,6 +200,29 @@ class TetraApp(tk.Tk):
         plot_frame = ttk.LabelFrame(main, text="3D візуалізація")
         plot_frame.pack(fill="both", expand=True, pady=5)
 
+        # Кнопки режимів відображення
+        view_btn_frame = ttk.Frame(plot_frame)
+        view_btn_frame.pack(fill="x", pady=5)
+
+        ttk.Button(
+            view_btn_frame,
+            text="Показати оболонку",
+            command=lambda: self.update_plot("hull"),
+        ).pack(side="left", expand=True, padx=2)
+
+        ttk.Button(
+            view_btn_frame,
+            text="Показати тетра-сітку",
+            command=lambda: self.update_plot("tets"),
+        ).pack(side="left", expand=True, padx=2)
+
+        ttk.Button(
+            view_btn_frame,
+            text="Показати все",
+            command=lambda: self.update_plot("both"),
+        ).pack(side="left", expand=True, padx=2)
+
+        # Полотно з графіком
         self.fig = Figure(figsize=(4, 3))
         self.ax = self.fig.add_subplot(111, projection="3d")
         self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
@@ -211,23 +241,50 @@ class TetraApp(tk.Tk):
         else:  # manual
             self.n_entry.configure(state="disabled")
 
-    def update_plot(self, pts, tets):
-        """
-        Перемалювати 3D-графік у вікні для поточної тетраедралізації.
-        """
-        self.ax.clear()
+    # ---------------- ВІЗУАЛІЗАЦІЯ ----------------
 
-        if not tets:
-            self.ax.set_title("Немає тетраедрів")
-            self.canvas.draw()
+    def _draw_hull(self):
+        """
+        Малює трикутні грані опуклої оболонки (surface)
+        як напівпрозору поверхню.
+        """
+        if not self.surface:
             return
 
-        # малюємо всі ребра тетраедрів
-        for (i0, i1, i2, i3) in tets:
-            vs = [pts[i0], pts[i1], pts[i2], pts[i3]]
-            edges = [(0, 1), (0, 2), (0, 3),
-                     (1, 2), (1, 3),
-                     (2, 3)]
+        polys = []
+        for tri in self.surface:
+            i0, i1, i2 = tri
+            p0, p1, p2 = self.pts[i0], self.pts[i1], self.pts[i2]
+            polys.append([
+                [p0.x, p0.y, p0.z],
+                [p1.x, p1.y, p1.z],
+                [p2.x, p2.y, p2.z],
+            ])
+
+        poly = Poly3DCollection(polys, alpha=0.25, linewidths=0.5)
+        poly.set_edgecolor("k")
+        self.ax.add_collection3d(poly)
+
+        # вершини (для наочності)
+        xs = [p.x for p in self.pts]
+        ys = [p.y for p in self.pts]
+        zs = [p.z for p in self.pts]
+        self.ax.scatter(xs, ys, zs, s=10)
+
+    def _draw_tets_edges(self):
+        """
+        Малює усі ребра тетраедрів як каркас.
+        """
+        if not self.tets:
+            return
+
+        for (i0, i1, i2, i3) in self.tets:
+            vs = [self.pts[i0], self.pts[i1], self.pts[i2], self.pts[i3]]
+            edges = [
+                (0, 1), (0, 2), (0, 3),
+                (1, 2), (1, 3),
+                (2, 3)
+            ]
             for a, b in edges:
                 pa, pb = vs[a], vs[b]
                 self.ax.plot(
@@ -237,10 +294,32 @@ class TetraApp(tk.Tk):
                     linewidth=0.5,
                 )
 
-        # однакові масштаби
-        xs = [p.x for p in pts]
-        ys = [p.y for p in pts]
-        zs = [p.z for p in pts]
+    def update_plot(self, mode: str):
+        """
+        Перемалювати 3D-графік у вікні для поточної тетраедралізації.
+
+        mode ∈ {"hull", "tets", "both"}.
+        """
+        if self.pts is None or self.tets is None or self.surface is None:
+            messagebox.showwarning(
+                "Немає даних",
+                "Спочатку запустіть тетраедралізацію."
+            )
+            return
+
+        self.ax.clear()
+
+        # Малюємо залежно від режиму
+        if mode in ("hull", "both"):
+            self._draw_hull()
+
+        if mode in ("tets", "both"):
+            self._draw_tets_edges()
+
+        # Однакові масштаби по осях
+        xs = [p.x for p in self.pts]
+        ys = [p.y for p in self.pts]
+        zs = [p.z for p in self.pts]
         if xs and ys and zs:
             min_x, max_x = min(xs), max(xs)
             min_y, max_y = min(ys), max(ys)
@@ -262,9 +341,17 @@ class TetraApp(tk.Tk):
         self.ax.set_xlabel("X")
         self.ax.set_ylabel("Y")
         self.ax.set_zlabel("Z")
-        self.ax.set_title("Tetrahedralization (edges)")
+
+        if mode == "hull":
+            self.ax.set_title("Опукла оболонка (трикутники поверхні)")
+        elif mode == "tets":
+            self.ax.set_title("Тетраедральна сітка (ребра)")
+        else:
+            self.ax.set_title("Оболонка + тетраедральна сітка")
 
         self.canvas.draw()
+
+    # ---------------- ЗАПУСК АЛГОРИТМУ ----------------
 
     def run_pipeline(self):
         mode = self.input_mode.get()
@@ -310,8 +397,14 @@ class TetraApp(tk.Tk):
             mesh.write_boundary_off("boundary.off")
             mesh.write_vtk_unstructured("volume.vtk")
 
-            # 5) Оновити 3D-графік у вікні
-            self.update_plot(pts, tets)
+            # Зберігаємо в полі об'єкта для подальшої візуалізації
+            self.pts = pts
+            self.surface = surface
+            self.tets = tets
+            self.mesh = mesh
+
+            # 5) Оновити 3D-графік у вікні (режим "все")
+            self.update_plot("both")
 
         except Exception as e:
             messagebox.showerror("Помилка виконання", str(e))
